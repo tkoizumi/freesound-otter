@@ -1,0 +1,30 @@
+# Otter runtime state: SQLite, run history, staged releases, the extracted SDK,
+# the prepared interpreter. `.otter/` belongs at the *project root* -- the
+# directory above this one -- but a stray one appears here if an otter command
+# is run from inside this directory. It is machine-local and rebuildable from
+# the manifest.
+.otter/
+
+# The identity marker the runtime writes into an integration directory. It
+# names *this checkout's* instance, not the integration, so a clone mints its
+# own; a committed marker is replaced on the first run and shows up as an
+# unexplained modification in a repo nobody edited.
+.otter-id
+.otter-id.tmp-*
+
+# Secrets. `otter.env` belongs at the project root, and no env file belongs in
+# git -- git cannot tell a filled-in template from a placeholder, so there is
+# deliberately no `!*.env.example` re-include.
+.env
+.env.*
+*.env
+*.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store

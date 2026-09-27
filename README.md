@@ -17,15 +17,44 @@ Freesound API (search + previews)        Otter                    Your Mac
     num_ratings >= 3                             last run
 ```
 
-Files in this directory:
+## Where this directory has to live
+
+This directory is the **integration, not the project**. Otter walks upward for a
+*project root* — the nearest directory holding `.otter/`, `.git/` or `go.mod` —
+and discovers every `otter.yaml` **below** that root. State lives in
+`<root>/.otter/data`, and secrets live in `<root>/otter.env`.
+
+```text
+freesound-project/          <- the project root: run otter commands from here
+├── otter.env               secrets; the daemon reads this file when it starts
+├── .otter/                 state: SQLite, run history, staged releases (machine-local)
+└── freesound/              this integration
+    ├── otter.yaml  main.py  rules.py  freesound_client.py
+    └── tests/test_rules.py
+```
+
+An integration can never *be* the project root. That is behind the two errors
+worth knowing:
+
+| Symptom | What happened |
+| --- | --- |
+| `release: the data directory …/freesound/.otter/data is inside …/freesound, so a snapshot would copy itself` | The root resolved to `freesound/` itself — a clone whose top level has `.git/` and no project above it — so the state directory landed inside the tree being snapshotted. `otter release` refuses by design. |
+| `no workspace here (no .otter in this directory or above)` | You moved this directory under a plain parent that has no `.otter/`, `.git/` or `go.mod`. Moving the directory moves its `.otter/` with it; the marker has to be at the parent. |
+
+## Files in this directory
 
 | File | What it is |
 | --- | --- |
-| `otter.yaml` | when it runs (every 5 minutes) and every setting |
+| `otter.yaml` | when it runs (every 5 minutes, once its `trigger:` is uncommented) and every setting |
 | `main.py` | what one run does: search, choose, download, remember |
 | `freesound_client.py` | all the network code, in one place |
 | `rules.py` | the decisions only: what counts as a keeper, filenames |
 | `tests/test_rules.py` | offline tests for `rules.py` |
+| `README.md` | this file |
+
+Otter also writes `.otter-id` here: the durable identity this integration's
+state, history, releases and tokens are keyed to. It and the project root's
+`.otter/` are machine-local — keep both out of git.
 
 ## Setup
 
@@ -37,15 +66,43 @@ column (the long string). That one value is your API key. The **Client id**
 beside it is not needed for search or MP3 previews — only for original-quality
 downloads, below.
 
-### 2. Put it in the project's secrets file
+### 2. Put this directory in an Otter project
 
-Secrets live in one file, at the repository root (`otter_examples/otter.env`),
-because the daemon has one environment for every integration. `otter.yaml` only
-*names* the key; the value never goes in there.
+If this directory already sits inside one — the directory above has `.otter/`,
+`.git/` or `go.mod`, as in a multi-integration workspace — that directory is the
+project root. `cd` to it and skip to step 3.
+
+Otherwise make a project root and put this directory inside it:
 
 ```bash
-cd /Users/taka/Desktop/otter_examples
-$EDITOR otter.env
+mkdir -p ~/Desktop/freesound-project
+cd ~/Desktop/freesound-project
+git init .                    # makes this the project root; `mkdir .otter` works too
+
+# a fresh clone...
+git clone https://github.com/tkoizumi/freesound-otter.git freesound
+
+# ...or move a clone you already have, and drop state an in-place attempt left behind:
+# mv ~/Desktop/freesound ~/Desktop/freesound-project/freesound
+# rm -rf freesound/.otter
+```
+
+Run the commands below **from `~/Desktop/freesound-project`** — not from inside
+`freesound/`. A clone carries its own `.git/`, so from inside it Otter would
+resolve the project to this integration itself and `otter release` would refuse,
+exactly as above. (In a workspace where `freesound/` is not its own repository,
+running from inside it does work: the search walks upward.)
+
+### 3. Put the key in the project's secrets file
+
+Secrets live in one file, `otter.env`, at the project root — not in `freesound/`,
+and never in `otter.yaml`, because the daemon has a single environment for every
+integration in the project. `otter.yaml` only *names* the key, under `secrets:`.
+
+```bash
+cd ~/Desktop/freesound-project     # the project root from step 2
+$EDITOR otter.env                  # create it if the project has none
+chmod 600 otter.env
 ```
 
 Add:
@@ -54,23 +111,29 @@ Add:
 FREESOUND_API_KEY=your-api-key-here
 ```
 
-### 3. Start the runtime
+### 4. Start the runtime
 
 The daemon reads `otter.env` **when it starts**, not when a run starts, so after
 editing the file it has to be restarted:
 
 ```bash
 otter validate freesound
-otter release freesound          # runs execute an immutable snapshot of this directory
-otter stop && otter start --detach
+otter release freesound          # runs execute an immutable snapshot of freesound/
+otter start --detach             # first time; later: otter stop && otter start --detach
 otter run freesound              # a manual run, right now
 ```
 
-You should see log lines like `downloaded` ending with `run finished`.
+You should see log lines like `downloaded` ending with `run finished`. Only the
+environment needs a restart: a new release activates on the running daemon by
+itself.
 
-### 4. Done
+The manifest ships **paused** — its `trigger:` block is commented out — so
+nothing fires on a schedule until you uncomment it and release again. See
+[Pausing and resuming](#pausing-and-resuming).
 
-The cron trigger fires every five minutes. Check on it any time:
+### 5. Done
+
+Check on it any time, from the project root:
 
 ```bash
 otter integrations --schedule              # next run time and last outcome
@@ -82,8 +145,9 @@ otter state get freesound last_run
 ## Choosing what to download
 
 Two settings decide what Freesound is asked for, both under `env:` in
-`otter.yaml`. With both empty, the only filter is the rating thresholds — you
-get the highest-rated sounds of any kind.
+`otter.yaml`. Out of the box `SEARCH_QUERY` is `percussion` and `SEARCH_FILTER`
+is empty, so it takes the highest-rated percussion sounds of any kind; the rating
+thresholds are always applied on top.
 
 | You want | Set |
 | --- | --- |
@@ -100,13 +164,16 @@ rows do — otherwise YAML may read it as a nested mapping rather than a string.
 
 `SEARCH_QUERY` is free text; Freesound matches it against tags, names,
 descriptions and pack names, and accepts `+term` (required), `-term` (excluded)
-and `"quoted phrases"`. `SEARCH_FILTER` is Freesound's own filter syntax, and the
+and `"quoted phrases"`. Set it to `""` for any sound. `SEARCH_FILTER` is
+Freesound's own filter syntax, and the
 [Broad Sound Taxonomy](https://freesound.org/help/broad-sound-taxonomy/) is the
 most reliable way to ask for a *kind* of sound, because it is assigned per sound
 rather than guessed from tags.
 
 `MIN_AVG_RATING` and `MIN_NUM_RATINGS` are appended to whatever you put in
-`SEARCH_FILTER`, so you never write the rating part yourself.
+`SEARCH_FILTER`, so you never write the rating part yourself. The whole
+expression is parenthesised, so an `OR` in your filter cannot let a low-rated
+sound slip past the thresholds.
 
 ## Size limits and the run budget
 
@@ -126,8 +193,8 @@ Use a `duration:` filter in `SEARCH_FILTER` when you want to bound size exactly.
 
 Keep `MAX_DOWNLOADS_PER_RUN × MAX_DOWNLOAD_MB` comfortably inside what your link
 can move in `RUN_BUDGET_SECONDS`. `cdn.freesound.org` can be slow — measured at
-~80 KB/s from one Mac, against 12 MB/s to a reference host — and the defaults
-(`2 × 5 MB`) are sized to finish in about two minutes at that speed.
+~80 KB/s from one Mac, against 12 MB/s to a reference host — and the shipped
+defaults (`2 × 5 MB`) are sized to finish in about two minutes at that speed.
 
 ## Where the files go
 
@@ -139,7 +206,7 @@ prefix is the Freesound sound id, so the source page is always
 you need to credit it later.
 
 To choose a different folder, edit `DOWNLOAD_DIR` under `env:` in `otter.yaml`
-(an absolute path, or `~/...`), then:
+(an absolute path, or `~/...`), then release again:
 
 ```bash
 otter release freesound
@@ -153,16 +220,17 @@ instead.
 
 ## Settings
 
-Everything below lives under `env:` in `otter.yaml`. Edit it, then run
-`otter release freesound` again — a running release does not change on its own.
+Everything below lives under `env:` in this integration's `otter.yaml`. Edit it,
+then run `otter release freesound` from the project root — a running release does
+not change on its own.
 
 `otter reload` is **not** a substitute. It re-reads the integrations directory and
 will make `otter inspect` show your new value, but a run still executes the active
 release, so it keeps using the old one. Release.
 
-| Setting | Default | Meaning |
+| Setting | In `otter.yaml` | Meaning |
 | --- | --- | --- |
-| `SEARCH_QUERY` | empty | Free text sent to Freesound's search: tags, names, descriptions, pack names. Empty = any sound. |
+| `SEARCH_QUERY` | `percussion` | Free text sent to Freesound's search: tags, names, descriptions, pack names. Empty = any sound. |
 | `SEARCH_FILTER` | empty | A Freesound filter expression (`tag:drum`, `category:"…"`, …). Empty = no extra restriction; the rating thresholds are appended to it. |
 | `MIN_AVG_RATING` | `4.0` | "Highly rated": average star rating, 0–5. |
 | `MIN_NUM_RATINGS` | `3` | …by at least this many people, so one enthusiastic vote is not enough. |
@@ -173,23 +241,30 @@ release, so it keeps using the old one. Release.
 | `MAX_DOWNLOAD_MB` | `5` | Skip any file bigger than this. `0` means no limit — download everything. |
 | `DOWNLOAD_FORMAT` | `preview` | `preview` = MP3, no OAuth2. `original` = the file as uploaded (see below). |
 | `DOWNLOAD_DIR` | `~/Desktop/freesound_audio_files` | Where audio lands. Absolute, or `~/...`; created if missing. |
-| `HTTP_TIMEOUT_SECONDS` | `60` | Give up on one HTTP request after this long. Raise it on a slow link. |
+| `HTTP_TIMEOUT_SECONDS` | `120` | Give up on one HTTP request after this long. Raise it on a slow link. |
 | `SEEN_LIMIT` | `5000` | How many sound ids to remember between runs. A speed knob; files on disk are checked too. |
 | `DRY_RUN` | `0` | `1` logs what *would* happen and writes nothing. Good for a first run. |
 | `FREESOUND_API_BASE` | `https://freesound.org/apiv2` | Only useful for pointing at a mock while developing. |
 
-Every one of these lives in `freesound/otter.yaml`, so changing behaviour never
-means editing Python. `trigger:`, `timeout`, `concurrency` and `retry` sit in the
-same file.
+Every one of these lives in this integration's `otter.yaml`, so changing
+behaviour never means editing Python. `trigger:`, `timeout`, `concurrency` and
+`retry` sit in the same file.
+
+Each setting also has a code default: delete its line from `otter.yaml` and the
+integration falls back to that. Where the two differ — `SEARCH_QUERY`
+(`percussion` → empty), `MAX_DOWNLOADS_PER_RUN` (`2` → `5`), `MAX_DOWNLOAD_MB`
+(`5` → `0`, no limit) and `HTTP_TIMEOUT_SECONDS` (`120` → `60`) — the manifest
+value is the one in force today.
 
 ## Pausing and resuming
 
-Pausing is a manifest change, not a CLI command. Comment out the `trigger:` block
-in `otter.yaml`:
+Pausing is a manifest change, not a CLI command. **The manifest ships paused:**
+its `trigger:` block is already commented out. To run every five minutes,
+uncomment it:
 
 ```yaml
-# trigger:
-#   cron: "*/5 * * * *"
+trigger:
+  cron: "*/5 * * * *"
 ```
 
 then release:
@@ -198,9 +273,9 @@ then release:
 otter release freesound
 ```
 
-The cron stops as soon as the release activates — no daemon restart — and
-`otter run freesound` still works whenever you want a manual run. Uncomment the
-block and release again to resume. `otter integrations --schedule` shows only the
+To pause again, comment the block out and release. The cron stops as soon as the
+release activates — no daemon restart — and `otter run freesound` still works
+whenever you want a manual run. `otter integrations --schedule` shows only the
 integrations with a live cron, so a paused one drops off that list.
 
 To stop *every* integration at once, use `otter stop` instead. To see what a
@@ -232,8 +307,8 @@ application acting on a user's behalf, so it needs OAuth2 as well as the API key
      -d "code=THE_CODE"
    ```
 
-4. Add the client id and the refresh token to `otter.env`, and switch the format
-   in `otter.yaml`:
+4. Add the client id and the refresh token to the project's `otter.env`, and
+   switch the format in `otter.yaml`:
 
    ```sh
    FREESOUND_CLIENT_ID=...
@@ -249,8 +324,13 @@ application acting on a user's behalf, so it needs OAuth2 as well as the API key
    secret. Set `FREESOUND_CLIENT_SECRET` as well only if your two values ever
    differ.
 
-5. `otter release freesound && otter stop && otter start --detach`, then
-   `otter run freesound`.
+5. From the project root:
+
+   ```bash
+   otter release freesound
+   otter stop && otter start --detach
+   otter run freesound
+   ```
 
 Freesound issues a **new refresh token every time one is used**, so the
 integration keeps the newest in Otter's state and the value in `otter.env` is
@@ -258,14 +338,28 @@ only the starting point. If you ever delete that state, redo step 3.
 
 Freesound's API is free for **non-commercial** use, and its rate limits are
 60 requests/minute (2000/day) for search and 30 requests/minute (500/day) for
-original-file downloads. The defaults here stay well inside both: one search per
-five minutes, and at most five downloads per run.
+original-file downloads. The defaults here stay well inside both: with the cron
+enabled, one search per five minutes, and at most two downloads per run
+(`MAX_DOWNLOADS_PER_RUN`).
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s freesound/tests
+cd freesound
+python3 -m unittest discover -s tests
 ```
+
+From the project root the same suite is
+`python3 -m unittest discover -s freesound/tests`.
 
 They cover `rules.py` only — the network code needs real credentials, and the
 rest is Otter's job.
+
+## Troubleshooting
+
+| Message | Cause | Fix |
+| --- | --- | --- |
+| `the data directory … is inside …, so a snapshot would copy itself` | The integration directory is also the project root, so `.otter/data` is inside the snapshot. | Make a project root above it and `cd` there; see [Where this directory has to live](#where-this-directory-has-to-live). |
+| `no workspace here (no .otter in this directory or above)` | The directory you ran from, and everything above it, lacks `.otter/`, `.git/` and `go.mod`. | Run from the project root — a directory with one of those markers and this integration below it. A plain wrapper directory is not a project until it has one. |
+| `requires secrets that are not available: …` | The daemon's environment lacks `FREESOUND_API_KEY`, almost always because it was started before `otter.env` was written. | `otter stop && otter start --detach`, then check uptime in `otter status` is newer than the file. |
+| `has no active release` (HTTP 409) | The integration was never released, or `.otter/` was cleared. | `otter release freesound` from the project root. |
