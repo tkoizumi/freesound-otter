@@ -1,0 +1,102 @@
+version: 1
+
+name: freesound
+
+description: Download highly rated sounds from Freesound every five minutes, matching a query you set.
+
+entrypoint: main.py
+
+# Every five minutes. Commented out to PAUSE the integration: it stops firing on
+# a schedule but `otter run freesound` still works. Uncomment and `otter release`
+# to resume.
+# trigger:
+#   cron: "*/5 * * * *"
+
+# A run must finish inside its own tick.
+timeout: 300
+concurrency: 1
+
+retry:
+  attempts: 3
+  backoff: exponential
+  initial_delay: 30s
+  max_delay: 2m
+
+# Every setting this integration reads, with the value it uses today. Change one
+# here, then `otter release freesound` -- a run keeps using the release it was
+# given until you do.
+#
+# `otter inspect` prints this whole block, so a credential must never be written
+# here. Credentials live in otter.env and are only *named* under `secrets:`.
+env:
+  # --- what to search for -------------------------------------------------- #
+  # Free text. Freesound matches it against tags, names, descriptions and pack
+  # names. Empty means "any sound".
+  #   kick        snare        "drum loop"        rain -thunder
+  # (`+term` forces a term, `-term` excludes one, "quotes" keep a phrase.)
+  SEARCH_QUERY: "percussion"
+
+  # A Freesound filter expression, or empty for no extra restriction. This is
+  # the precise way to pick a kind of sound. Examples:
+  #   tag:drum
+  #   category:"Music" AND subcategory:"Solo percussion"
+  #   category:"Sound effects" AND subcategory:"Animals"
+  #   type:wav AND channels:1 AND duration:[0 TO 5]
+  # Broad Sound Taxonomy: https://freesound.org/help/broad-sound-taxonomy/
+  # The rating thresholds below are appended to whatever you put here.
+  SEARCH_FILTER: ""
+
+  # Highest rated first. Also valid: score, downloads_desc, created_desc,
+  # duration_desc, duration_asc, rating_asc.
+  SORT: rating_desc
+
+  # Sounds per search request, 1-150.
+  PAGE_SIZE: "50"
+
+  # --- what "highly rated" means ------------------------------------------- #
+  # Average star rating, 0-5.
+  MIN_AVG_RATING: "4.0"
+  # ...given by at least this many people, so one vote is not enough.
+  MIN_NUM_RATINGS: "3"
+
+  # --- where the audio goes ------------------------------------------------ #
+  # Absolute path, or ~/... . Created if it does not exist.
+  DOWNLOAD_DIR: "~/Desktop/freesound_audio_files"
+
+  # preview  = MP3 preview, works with just FREESOUND_API_KEY.
+  # original = the file as it was uploaded, needs the OAuth2 variables too.
+  DOWNLOAD_FORMAT: preview
+
+  # --- how much one run may do --------------------------------------------- #
+  # Two files per run, not five: at ~80 KB/s a 5 MB file takes about a minute,
+  # and a run has to finish inside the 300s timeout below. The rest waits.
+  MAX_DOWNLOADS_PER_RUN: "2"
+  # Stop early and continue next run, instead of being killed by the 300s timeout.
+  RUN_BUDGET_SECONDS: "240"
+  # Skip any file larger than this many megabytes. 0 means no limit.
+  # For previews the size follows the sound's duration (~0.94 MB per minute at
+  # hq), so a `duration:` filter is the precise lever; this is the backstop that
+  # catches whatever the filter let through.
+  MAX_DOWNLOAD_MB: "5"
+
+  # --- rarely changed ------------------------------------------------------ #
+  # Seconds before an HTTP request is given up on. Raise it on a slow link;
+  # original-quality downloads can be large.
+  HTTP_TIMEOUT_SECONDS: "120"
+  # How many downloaded sound ids to remember, so a run does not offer the same
+  # sound twice. The files on disk are checked as well, so this is a speed knob.
+  SEEN_LIMIT: "5000"
+  # 1 logs what would happen and writes nothing. Good for a first run.
+  DRY_RUN: "0"
+  # Only useful for pointing at a mock server while developing.
+  FREESOUND_API_BASE: https://freesound.org/apiv2
+
+# Read from the DAEMON's environment (otter.env at the project root), never from
+# this file. Adding a name here makes it required: a missing value fails the run
+# before Python starts, with a clear message.
+secrets:
+  - FREESOUND_API_KEY
+# Optional, and only for DOWNLOAD_FORMAT: original -- never put values here:
+#   FREESOUND_CLIENT_ID      the "Client id" from the Freesound credential page
+#   FREESOUND_REFRESH_TOKEN  from the one-time OAuth2 flow (see README.md)
+#   FREESOUND_CLIENT_SECRET  only if it differs from FREESOUND_API_KEY
