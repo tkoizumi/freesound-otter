@@ -17,48 +17,57 @@ Freesound API (search + previews)        Otter                    Your Mac
     num_ratings >= 3                             last run
 ```
 
-## Where this directory has to live
+## Layout
 
-This directory is the **integration, not the project**. Otter walks upward for a
-*project root* — the nearest directory holding `.otter/`, `.git/` or `go.mod` —
-and discovers every `otter.yaml` **below** that root. State lives in
-`<root>/.otter/data`, and secrets live in `<root>/otter.env`.
+This repository **is an Otter project**, and the integration is one directory
+inside it. That is what makes a clone runnable as-is: Otter finds the project
+root by walking up to the nearest `.otter/`, `.git/` or `go.mod`, so the `.git/`
+at the top of the clone is the marker, and everything below it is scanned for
+`otter.yaml`.
 
 ```text
-freesound-project/          <- the project root: run otter commands from here
-├── otter.env               secrets; the daemon reads this file when it starts
+freesound-otter/            <- clone root = project root: run otter here
+├── otter.env.example       committed template
+├── otter.env               your secrets (gitignored)
 ├── .otter/                 state: SQLite, run history, staged releases (machine-local)
-└── freesound/              this integration
+├── .gitignore
+├── README.md
+└── freesound/              the integration
     ├── otter.yaml  main.py  rules.py  freesound_client.py
     └── tests/test_rules.py
 ```
 
-An integration can never *be* the project root. That is behind the two errors
-worth knowing:
+State lives in `<root>/.otter/data` and secrets live in `<root>/otter.env`. An
+integration can never *be* the project root: move `freesound/` out, make it a
+clone of its own, and `otter release` computes its data directory as
+`freesound/.otter/data`, sees it inside the tree it is about to snapshot, and
+refuses. See [Troubleshooting](#troubleshooting).
 
-| Symptom | What happened |
-| --- | --- |
-| `release: the data directory …/freesound/.otter/data is inside …/freesound, so a snapshot would copy itself` | The root resolved to `freesound/` itself — a clone whose top level has `.git/` and no project above it — so the state directory landed inside the tree being snapshotted. `otter release` refuses by design. |
-| `no workspace here (no .otter in this directory or above)` | You moved this directory under a plain parent that has no `.otter/`, `.git/` or `go.mod`. Moving the directory moves its `.otter/` with it; the marker has to be at the parent. |
-
-## Files in this directory
+## Files in this repository
 
 | File | What it is |
 | --- | --- |
-| `otter.yaml` | when it runs (every 5 minutes, once its `trigger:` is uncommented) and every setting |
-| `main.py` | what one run does: search, choose, download, remember |
-| `freesound_client.py` | all the network code, in one place |
-| `rules.py` | the decisions only: what counts as a keeper, filenames |
-| `tests/test_rules.py` | offline tests for `rules.py` |
+| `otter.env.example` | template for the project's secrets file; copy it, never fill it in |
+| `.gitignore` | keeps state, identity markers and secrets out of git |
 | `README.md` | this file |
+| `freesound/otter.yaml` | when it runs (every 5 minutes, once its `trigger:` is uncommented) and every setting |
+| `freesound/main.py` | what one run does: search, choose, download, remember |
+| `freesound/freesound_client.py` | all the network code, in one place |
+| `freesound/rules.py` | the decisions only: what counts as a keeper, filenames |
+| `freesound/tests/test_rules.py` | offline tests for `rules.py` |
 
-Otter also writes `.otter-id` here: the durable identity this integration's
-state, history, releases and tokens are keyed to. It and the project root's
-`.otter/` are machine-local — keep both out of git.
+Otter also writes `freesound/.otter-id` — the durable identity this
+integration's state, history, releases and tokens are keyed to — and `.otter/`
+at the project root. Both are machine-local and gitignored.
 
 ## Setup
 
-### 1. Get a Freesound API key
+### 1. Clone, and get a Freesound API key
+
+```bash
+git clone https://github.com/tkoizumi/freesound-otter.git
+cd freesound-otter
+```
 
 Sign in at Freesound, request a credential at
 <https://freesound.org/apiv2/apply>, and copy the **Client secret / API key**
@@ -66,55 +75,29 @@ column (the long string). That one value is your API key. The **Client id**
 beside it is not needed for search or MP3 previews — only for original-quality
 downloads, below.
 
-### 2. Put this directory in an Otter project
-
-If this directory already sits inside one — the directory above has `.otter/`,
-`.git/` or `go.mod`, as in a multi-integration workspace — that directory is the
-project root. `cd` to it and skip to step 3.
-
-Otherwise make a project root and put this directory inside it:
-
-```bash
-mkdir -p ~/Desktop/freesound-project
-cd ~/Desktop/freesound-project
-git init .                    # makes this the project root; `mkdir .otter` works too
-
-# a fresh clone...
-git clone https://github.com/tkoizumi/freesound-otter.git freesound
-
-# ...or move a clone you already have, and drop state an in-place attempt left behind:
-# mv ~/Desktop/freesound ~/Desktop/freesound-project/freesound
-# rm -rf freesound/.otter
-```
-
-Run the commands below **from `~/Desktop/freesound-project`** — not from inside
-`freesound/`. A clone carries its own `.git/`, so from inside it Otter would
-resolve the project to this integration itself and `otter release` would refuse,
-exactly as above. (In a workspace where `freesound/` is not its own repository,
-running from inside it does work: the search walks upward.)
-
-### 3. Put the key in the project's secrets file
+### 2. Put it in the project's secrets file
 
 Secrets live in one file, `otter.env`, at the project root — not in `freesound/`,
-and never in `otter.yaml`, because the daemon has a single environment for every
-integration in the project. `otter.yaml` only *names* the key, under `secrets:`.
+and never in `otter.yaml`, because the daemon has a single environment for the
+whole project. `otter.yaml` only *names* the key, under `secrets:`.
 
 ```bash
-cd ~/Desktop/freesound-project     # the project root from step 2
-$EDITOR otter.env                  # create it if the project has none
+cp otter.env.example otter.env
 chmod 600 otter.env
+$EDITOR otter.env
 ```
 
-Add:
+Uncomment and fill in:
 
 ```sh
 FREESOUND_API_KEY=your-api-key-here
 ```
 
-### 4. Start the runtime
+### 3. Start the runtime
 
 The daemon reads `otter.env` **when it starts**, not when a run starts, so after
-editing the file it has to be restarted:
+editing the file it has to be restarted. Run these from the project root (the
+clone):
 
 ```bash
 otter validate freesound
@@ -131,7 +114,7 @@ The manifest ships **paused** — its `trigger:` block is commented out — so
 nothing fires on a schedule until you uncomment it and release again. See
 [Pausing and resuming](#pausing-and-resuming).
 
-### 5. Done
+### 4. Done
 
 Check on it any time, from the project root:
 
@@ -145,9 +128,9 @@ otter state get freesound last_run
 ## Choosing what to download
 
 Two settings decide what Freesound is asked for, both under `env:` in
-`otter.yaml`. Out of the box `SEARCH_QUERY` is `percussion` and `SEARCH_FILTER`
-is empty, so it takes the highest-rated percussion sounds of any kind; the rating
-thresholds are always applied on top.
+`freesound/otter.yaml`. Out of the box `SEARCH_QUERY` is `percussion` and
+`SEARCH_FILTER` is empty, so it takes the highest-rated percussion sounds of any
+kind; the rating thresholds are always applied on top.
 
 | You want | Set |
 | --- | --- |
@@ -205,8 +188,8 @@ prefix is the Freesound sound id, so the source page is always
 `https://freesound.org/s/<id>/`, where the author and licence can be looked up if
 you need to credit it later.
 
-To choose a different folder, edit `DOWNLOAD_DIR` under `env:` in `otter.yaml`
-(an absolute path, or `~/...`), then release again:
+To choose a different folder, edit `DOWNLOAD_DIR` under `env:` in
+`freesound/otter.yaml` (an absolute path, or `~/...`), then release again:
 
 ```bash
 otter release freesound
@@ -214,15 +197,15 @@ otter release freesound
 
 Because the value comes from `otter.yaml`, setting `DOWNLOAD_DIR` in `otter.env`
 will **not** override it — a manifest value always wins. If you would rather keep
-the folder per-machine, delete the `DOWNLOAD_DIR` line from `otter.yaml` (the
-code falls back to `~/Desktop/freesound_audio_files`) and set it in `otter.env`
-instead.
+the folder per-machine, delete the `DOWNLOAD_DIR` line from
+`freesound/otter.yaml` (the code falls back to `~/Desktop/freesound_audio_files`)
+and set it in `otter.env` instead.
 
 ## Settings
 
-Everything below lives under `env:` in this integration's `otter.yaml`. Edit it,
-then run `otter release freesound` from the project root — a running release does
-not change on its own.
+Everything below lives under `env:` in `freesound/otter.yaml`. Edit it, then run
+`otter release freesound` from the project root — a running release does not
+change on its own.
 
 `otter reload` is **not** a substitute. It re-reads the integrations directory and
 will make `otter inspect` show your new value, but a run still executes the active
@@ -246,9 +229,9 @@ release, so it keeps using the old one. Release.
 | `DRY_RUN` | `0` | `1` logs what *would* happen and writes nothing. Good for a first run. |
 | `FREESOUND_API_BASE` | `https://freesound.org/apiv2` | Only useful for pointing at a mock while developing. |
 
-Every one of these lives in this integration's `otter.yaml`, so changing
-behaviour never means editing Python. `trigger:`, `timeout`, `concurrency` and
-`retry` sit in the same file.
+Every one of these lives in `freesound/otter.yaml`, so changing behaviour never
+means editing Python. `trigger:`, `timeout`, `concurrency` and `retry` sit in the
+same file.
 
 Each setting also has a code default: delete its line from `otter.yaml` and the
 integration falls back to that. Where the two differ — `SEARCH_QUERY`
@@ -307,8 +290,8 @@ application acting on a user's behalf, so it needs OAuth2 as well as the API key
      -d "code=THE_CODE"
    ```
 
-4. Add the client id and the refresh token to the project's `otter.env`, and
-   switch the format in `otter.yaml`:
+4. Add the client id and the refresh token to `otter.env`, and switch the format
+   in `freesound/otter.yaml`:
 
    ```sh
    FREESOUND_CLIENT_ID=...
@@ -344,13 +327,14 @@ enabled, one search per five minutes, and at most two downloads per run
 
 ## Tests
 
+From the project root:
+
 ```bash
-cd freesound
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s freesound/tests
 ```
 
-From the project root the same suite is
-`python3 -m unittest discover -s freesound/tests`.
+Or from inside the integration: `cd freesound && python3 -m unittest discover
+-s tests`.
 
 They cover `rules.py` only — the network code needs real credentials, and the
 rest is Otter's job.
@@ -359,7 +343,7 @@ rest is Otter's job.
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| `the data directory … is inside …, so a snapshot would copy itself` | The integration directory is also the project root, so `.otter/data` is inside the snapshot. | Make a project root above it and `cd` there; see [Where this directory has to live](#where-this-directory-has-to-live). |
-| `no workspace here (no .otter in this directory or above)` | The directory you ran from, and everything above it, lacks `.otter/`, `.git/` and `go.mod`. | Run from the project root — a directory with one of those markers and this integration below it. A plain wrapper directory is not a project until it has one. |
+| `the data directory … is inside …, so a snapshot would copy itself` | The integration directory is also the project root — for example you copied `freesound/` out of this project and ran `otter` inside it. | Run from the project root, with `freesound/` below it; see [Layout](#layout). |
+| `no workspace here (no .otter in this directory or above)` | The directory you ran from, and everything above it, lacks `.otter/`, `.git/` and `go.mod`. | Run from the project root — a directory with one of those markers and `freesound/` below it. A plain wrapper directory is not a project until it has one. |
 | `requires secrets that are not available: …` | The daemon's environment lacks `FREESOUND_API_KEY`, almost always because it was started before `otter.env` was written. | `otter stop && otter start --detach`, then check uptime in `otter status` is newer than the file. |
 | `has no active release` (HTTP 409) | The integration was never released, or `.otter/` was cleared. | `otter release freesound` from the project root. |

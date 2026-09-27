@@ -1,8 +1,6 @@
 # Otter runtime state: SQLite, run history, staged releases, the extracted SDK,
-# the prepared interpreter. `.otter/` belongs at the *project root* -- the
-# directory above this one -- but a stray one appears here if an otter command
-# is run from inside this directory. It is machine-local and rebuildable from
-# the manifest.
+# the prepared interpreter. `.otter/` lives at the project root -- this
+# directory -- and is machine-local and rebuildable from the manifest.
 .otter/
 
 # The identity marker the runtime writes into an integration directory. It
@@ -14,7 +12,9 @@
 
 # Secrets. `otter.env` belongs at the project root, and no env file belongs in
 # git -- git cannot tell a filled-in template from a placeholder, so there is
-# deliberately no `!*.env.example` re-include.
+# deliberately no `!*.env.example` re-include. `otter.env.example` is tracked
+# only because it was added with `git add -f`; ignore rules do not apply to a
+# file git already tracks.
 .env
 .env.*
 *.env
